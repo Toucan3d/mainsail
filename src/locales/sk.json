@@ -17,5 +17,11 @@
             }
         }
     },
+    "Settings": {
+        "ControlTab": {
+            "MoveDistancesAInMm": "Move distance increments A axis (in mm)",
+            "SpeedA": "Movement speed A axis"
+        }
+    },
     "title": "Slovenský"
 }

@@ -19,6 +19,10 @@ export default class ControlMixin extends Vue {
         return this.$store.state.gui.control?.feedrateZ ?? 10
     }
 
+    get feedrateA() {
+        return this.$store.state.gui.control?.feedrateA ?? 10
+    }
+
     get existsQGL() {
         return this.$store.getters['printer/existsQGL']
     }
@@ -103,6 +107,24 @@ export default class ControlMixin extends Vue {
 
     get zAxisHomed(): boolean {
         return this.homedAxes.includes('z')
+    }
+
+    get axisMap(): { [key: string]: number } {
+        return this.$store.state.printer?.gcode_move?.axis_map ?? {}
+    }
+
+    get aAxisIndex(): number | null {
+        const index = this.axisMap.A
+
+        return Number.isInteger(index) && index >= 0 ? index : null
+    }
+
+    get aAxisAvailable(): boolean {
+        return (
+            this.aAxisIndex !== null &&
+            this.isAxisPositionAvailable('motion_report.live_position', 'A') &&
+            this.isAxisPositionAvailable('gcode_move.gcode_position', 'A')
+        )
     }
 
     get macros() {
@@ -195,8 +217,40 @@ export default class ControlMixin extends Vue {
         this.doSend(command)
     }
 
+    doSendMoveA(distance: number) {
+        if (!this.aAxisAvailable || !Number.isFinite(distance)) return
+
+        const value = distance > 0 ? `+${distance}` : distance.toString()
+        const command =
+            `SAVE_GCODE_STATE NAME=_ui_movement\n` +
+            `G91\n` +
+            `G1 A${value} F${this.feedrateA * 60}\n` +
+            `RESTORE_GCODE_STATE NAME=_ui_movement`
+
+        this.doSend(command)
+    }
+
     doSend(gcode: string) {
         this.$store.dispatch('server/addEvent', { message: gcode, type: 'command' })
         this.$socket.emit('printer.gcode.script', { script: gcode })
+    }
+
+    getAxisPosition(path: string, axis: string, digits: number): string {
+        const index = this.axisMap[axis]
+        if (!Number.isInteger(index) || index < 0) return '--'
+
+        const position = path.split('.').reduce((value, key) => value?.[key], this.$store.state.printer)
+        const axisPosition = position?.[index]
+
+        return Number.isFinite(axisPosition) ? axisPosition.toFixed(digits) : '--'
+    }
+
+    isAxisPositionAvailable(path: string, axis: string): boolean {
+        const index = this.axisMap[axis]
+        if (!Number.isInteger(index) || index < 0) return false
+
+        const position = path.split('.').reduce((value, key) => value?.[key], this.$store.state.printer)
+
+        return Number.isFinite(position?.[index])
     }
 }

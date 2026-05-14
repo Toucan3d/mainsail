@@ -89,6 +89,7 @@
         <!-- AXIS CONTROL -->
         <v-container v-if="axisControlVisible">
             <component :is="`${controlStyle}-control`" />
+            <a-axis-control v-if="aAxisAvailable" />
         </v-container>
         <!-- Z-OFFSET CONTROL -->
         <v-divider v-if="showZOffset" />
@@ -116,6 +117,7 @@
 
 <script lang="ts">
 import { Component, Mixins } from 'vue-property-decorator'
+import AAxisControl from '@/components/panels/ToolheadControls/AAxisControl.vue'
 import BarsControl from '@/components/panels/ToolheadControls/BarsControl.vue'
 import BaseMixin from '../mixins/base'
 import CircleControl from '@/components/panels/ToolheadControls/CircleControl.vue'
@@ -129,6 +131,7 @@ import { mdiDotsVertical, mdiEngineOff, mdiGamepad, mdiSpeedometer, mdiMenuDown,
 
 @Component({
     components: {
+        AAxisControl,
         BarsControl,
         CircleControl,
         CrossControl,

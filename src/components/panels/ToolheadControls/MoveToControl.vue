@@ -30,7 +30,7 @@
                     </v-col>
                 </v-row>
                 <v-row v-if="showCoordinates" dense>
-                    <v-col :class="el.is.xsmall ? 'col-12' : 'col-4'">
+                    <v-col :class="coordinateColClass(el)">
                         <move-to-input
                             v-model="input.x.pos"
                             :label="livePositions.x"
@@ -41,7 +41,7 @@
                             :disabled="!xAxisHomed"
                             @submit="sendCmd" />
                     </v-col>
-                    <v-col :class="el.is.xsmall ? 'col-12' : 'col-4'">
+                    <v-col :class="coordinateColClass(el)">
                         <move-to-input
                             v-model="input.y.pos"
                             :label="livePositions.y"
@@ -52,7 +52,7 @@
                             :disabled="!yAxisHomed"
                             @submit="sendCmd" />
                     </v-col>
-                    <v-col :class="el.is.xsmall ? 'col-12' : 'col-4'">
+                    <v-col :class="coordinateColClass(el)">
                         <move-to-input
                             v-model="input.z.pos"
                             :label="livePositions.z"
@@ -61,6 +61,17 @@
                             :current-pos="gcodePositions.z"
                             :readonly="['printing'].includes(printer_state)"
                             :disabled="!zAxisHomed"
+                            @submit="sendCmd" />
+                    </v-col>
+                    <v-col v-if="aAxisAvailable" :class="coordinateColClass(el)">
+                        <move-to-input
+                            v-model="input.a.pos"
+                            :label="livePositions.a"
+                            :suffix="'A'"
+                            :step="0.001"
+                            :current-pos="gcodePositions.a"
+                            :readonly="['printing'].includes(printer_state)"
+                            :disabled="!aAxisAvailable"
                             @submit="sendCmd" />
                     </v-col>
                 </v-row>
@@ -88,6 +99,7 @@ export default class MoveToControl extends Mixins(BaseMixin, ControlMixin) {
         x: { pos: '', valid: true },
         y: { pos: '', valid: true },
         z: { pos: '', valid: true },
+        a: { pos: '', valid: true },
     }
 
     @Watch('gcodePositions.x', { immediate: true })
@@ -103,6 +115,11 @@ export default class MoveToControl extends Mixins(BaseMixin, ControlMixin) {
     @Watch('gcodePositions.z', { immediate: true })
     updatePositionZ(newVal: string): void {
         this.input.z.pos = newVal
+    }
+
+    @Watch('gcodePositions.a', { immediate: true })
+    updatePositionA(newVal: string): void {
+        this.input.a.pos = newVal
     }
 
     /**
@@ -124,6 +141,7 @@ export default class MoveToControl extends Mixins(BaseMixin, ControlMixin) {
             x: pos[0]?.toFixed(2) ?? '--',
             y: pos[1]?.toFixed(2) ?? '--',
             z: pos[2]?.toFixed(3) ?? '--',
+            a: this.getAxisPosition('motion_report.live_position', 'A', 3),
         }
     }
 
@@ -133,6 +151,7 @@ export default class MoveToControl extends Mixins(BaseMixin, ControlMixin) {
             x: pos[0]?.toFixed(2) ?? '--',
             y: pos[1]?.toFixed(2) ?? '--',
             z: pos[2]?.toFixed(3) ?? '--',
+            a: this.getAxisPosition('gcode_move.gcode_position', 'A', 3),
         }
     }
 
@@ -163,17 +182,24 @@ export default class MoveToControl extends Mixins(BaseMixin, ControlMixin) {
         return this.showControl ? 'pb-0' : ''
     }
 
-    sendCmd(): void {
-        let gcode: string[] = []
-        if (!this.existsClientLinearMoveMacro) {
-            gcode.push('SAVE_GCODE_STATE NAME=_ui_movement')
-            gcode.push('G90')
-        }
+    coordinateColClass(el: any) {
+        if (el.is.xsmall) return 'col-12'
 
+        return this.aAxisAvailable ? 'col-3' : 'col-4'
+    }
+
+    sendCmd(): void {
+        const gcode: string[] = []
+        const standardMoveGcode: string[] = []
+        let hasMove = false
+
+        if (!this.existsClientLinearMoveMacro) standardMoveGcode.push('SAVE_GCODE_STATE NAME=_ui_movement', 'G90')
         if (this.input.z.pos !== this.gcodePositions.z) {
             if (this.existsClientLinearMoveMacro)
                 gcode.push(`_CLIENT_LINEAR_MOVE Z=${this.input.z.pos} F=${this.feedrateZ * 60} ABSOLUTE=1`)
-            else gcode.push(`G1 Z${this.input.z.pos} F${this.feedrateZ * 60}`)
+            else standardMoveGcode.push(`G1 Z${this.input.z.pos} F${this.feedrateZ * 60}`)
+
+            hasMove = true
         }
 
         if (this.input.x.pos !== this.gcodePositions.x || this.input.y.pos !== this.gcodePositions.y) {
@@ -189,17 +215,30 @@ export default class MoveToControl extends Mixins(BaseMixin, ControlMixin) {
                 if (this.input.x.pos !== this.gcodePositions.x) xPos = ` X${this.input.x.pos}`
                 if (this.input.y.pos !== this.gcodePositions.y) yPos = ` Y${this.input.y.pos}`
 
-                gcode.push(`G1${xPos}${yPos} F${this.feedrateXY * 60}`)
+                standardMoveGcode.push(`G1${xPos}${yPos} F${this.feedrateXY * 60}`)
             }
+
+            hasMove = true
         }
 
-        if (!this.existsClientLinearMoveMacro) {
-            gcode.push('RESTORE_GCODE_STATE NAME=_ui_movement')
+        if (!this.existsClientLinearMoveMacro && hasMove) {
+            standardMoveGcode.push('RESTORE_GCODE_STATE NAME=_ui_movement')
+            gcode.push(...standardMoveGcode)
+        }
+
+        if (this.input.a.pos !== this.gcodePositions.a && this.aAxisAvailable) {
+            gcode.push(
+                'SAVE_GCODE_STATE NAME=_ui_movement',
+                'G90',
+                `G1 A${this.input.a.pos} F${this.feedrateA * 60}`,
+                'RESTORE_GCODE_STATE NAME=_ui_movement'
+            )
+            hasMove = true
         }
 
         const gcodeStr = gcode.join('\n')
 
-        if (this.input.x.valid && this.input.y.valid && this.input.z.valid) {
+        if (hasMove && this.input.x.valid && this.input.y.valid && this.input.z.valid && this.input.a.valid) {
             this.$store.dispatch('server/addEvent', { message: gcodeStr, type: 'command' })
             this.$socket.emit('printer.gcode.script', { script: gcodeStr })
         }
