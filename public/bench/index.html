@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testbench</title>
+<!--
+  Toucan3D test bench dashboard for the browser.
+  Mirrors the KlipperScreen bench layout (graphs left; data, console, favorites,
+  monitor buttons and fans right) and adds the test data file list.
+  Served by nginx from ~/mainsail/bench -> ~/toucan-bench-ui, linked in the
+  Mainsail sidebar through config/.theme/navi.json. Talks to Moonraker over
+  the same-origin websocket, so no CORS or API key is needed.
+-->
+<style>
+:root {
+  --bg: #121212; --card: #1e1e1e; --card-head: #262626; --inner: #181d24;
+  --border: #2f2f2f; --text: #e8eaed; --muted: #8a929c; --dim: #6b7480;
+  --primary: #2196f3; --danger: #f44336;
+  --flow: #5DCAA5; --force: #97C459; --ok: #5DCAA5; --err: #F09595;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: Roboto, "Segoe UI", Arial, sans-serif; font-size: 14px; }
+a { color: var(--primary); text-decoration: none; }
+header { position: sticky; top: 0; z-index: 5; height: 48px; display: flex; align-items: center;
+  gap: 12px; padding: 0 16px; background: var(--card); border-bottom: 1px solid var(--border); }
+header .logo { display: flex; align-items: center; gap: 10px; font-size: 20px; color: var(--text); }
+header .logo svg { width: 26px; height: 26px; }
+header .spacer { flex: 1; }
+header .state { font-size: 12px; color: var(--muted); }
+header .state.bad { color: var(--err); }
+.hbtn { background: none; border: none; color: var(--primary); font: inherit; font-weight: 500;
+  letter-spacing: .08em; text-transform: uppercase; cursor: pointer; padding: 6px 8px; font-size: 13px; }
+.hbtn.estop { color: var(--danger); }
+main { padding: 12px 16px 24px; display: grid; gap: 12px;
+  grid-template-columns: minmax(0, 6fr) minmax(0, 5fr); }
+.card { background: var(--card); border-radius: 4px; display: flex; flex-direction: column;
+  min-width: 0; box-shadow: 0 2px 1px -1px rgba(0,0,0,.2), 0 1px 3px rgba(0,0,0,.3); }
+.card > h2 { margin: 0; padding: 10px 14px; font-size: 17px; font-weight: 400; display: flex;
+  align-items: center; gap: 10px; background: var(--card-head); border-radius: 4px 4px 0 0; }
+.card > h2 svg { width: 20px; height: 20px; fill: currentColor; }
+.card > h2 .right { margin-left: auto; font-size: 12px; color: var(--muted); }
+.card .body { padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1; }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.graphs { height: calc(100vh - 120px); min-height: 520px; }
+.graphs .body { display: grid; grid-auto-rows: 1fr; gap: 8px; }
+.gbox { background: var(--inner); border-radius: 6px; display: flex; flex-direction: column; min-height: 0; }
+.gbox .ghead { display: flex; justify-content: space-between; padding: 4px 8px;
+  font-family: Consolas, monospace; font-size: 12.5px; }
+.gbox canvas { flex: 1; width: 100%; min-height: 0; cursor: pointer; display: block; }
+.data { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px;
+  background: var(--inner); border-radius: 6px; padding: 6px 10px;
+  font-family: Consolas, monospace; font-size: 12.5px; }
+.data .r { display: flex; justify-content: space-between; gap: 6px; line-height: 1.55; white-space: nowrap; }
+.data .r span:first-child { color: var(--muted); }
+.data .r span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.data .h { font-weight: 700; color: var(--text) !important; }
+.console { display: flex; flex-direction: column; min-height: 0; }
+.cbar { display: flex; gap: 6px; }
+.cbar input { flex: 1; min-width: 0; background: #0d1014; border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: 7px 10px; font-family: Consolas, monospace; font-size: 13px; }
+.cbar input:focus { outline: none; border-color: var(--primary); }
+.clog { background: #0d1014; border-radius: 6px; padding: 6px 8px; margin-top: 6px; height: 260px;
+  overflow-y: auto; font-family: Consolas, monospace; font-size: 12.5px; }
+.clog div { white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.clog .t { color: var(--dim); margin-right: 8px; }
+.clog .command { color: #85B7EB; } .clog .error { color: var(--err); }
+.clog .response { color: #C9CCD1; } .clog .info { color: var(--muted); }
+button.b { background: #262e38; border: 1px solid #3a4553; border-radius: 6px; color: var(--text);
+  font: inherit; padding: 6px 8px; cursor: pointer; min-height: 34px; }
+button.b:hover { background: #2e3844; } button.b:active { background: #3a4553; }
+button.b.go { background: #0F6E56; border-color: #1D9E75; }
+button.b.stop { background: #791F1F; border-color: #A32D2D; }
+button.b.unset { color: var(--dim); }
+button.b small { display: block; font-size: 11.5px; color: #c9ccd1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+button.b.unset small { color: var(--dim); }
+.favs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.mon { display: grid; grid-template-columns: auto 1fr 1fr 1fr; gap: 6px; align-items: stretch; }
+.mon input { width: 150px; background: #0d1014; border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: 6px 8px; font: inherit; }
+.fan { display: flex; align-items: center; gap: 8px; background: var(--inner); border-radius: 6px; padding: 4px 8px; }
+.fan .n { font-family: Consolas, monospace; width: 60px; }
+.fan input[type=range] { flex: 1; accent-color: var(--primary); }
+.fan .v { width: 44px; text-align: right; font-family: Consolas, monospace; }
+.files { grid-column: 1 / -1; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+td.name { white-space: normal; word-break: break-all; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: #2a3440; color: var(--muted); }
+.icon-btn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 2px 6px; font: inherit; }
+.icon-btn:hover { color: var(--err); }
+.empty { color: var(--muted); padding: 14px; }
+.banner { grid-column: 1 / -1; background: #3b1d1d; color: var(--err); border-radius: 4px; padding: 10px 14px; display: none; }
+@media (max-width: 1000px) {
+  main { grid-template-columns: 1fr; padding: 12px 8px; }
+  .graphs { height: 640px; }
+  .data { grid-template-columns: 1fr 1fr; }
+  .mon { grid-template-columns: 1fr 1fr 1fr; } .mon input { grid-column: 1 / -1; width: 100%; }
+  .hide-sm { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/" title="Back to Mainsail">
+    <svg viewBox="0 0 24 24"><path fill="#e53935" d="M3 21 12 3l3 6-6 12H3zm9 0 4.5-9L21 21h-9z"/></svg>
+    <span id="hostname">testbench</span>
+  </a>
+  <span class="state" id="state">connecting…</span>
+  <span class="spacer"></span>
+  <a class="hbtn" href="/">Mainsail</a>
+  <a class="hbtn hide-sm" href="/config">Config</a>
+  <button class="hbtn estop" id="estop">Emergency stop</button>
+</header>
+
+<main>
+  <div class="banner" id="banner"></div>
+
+  <section class="card graphs">
+    <h2><svg viewBox="0 0 24 24"><path d="M16 11.78 20.24 4.45 21.97 5.45 16.74 14.5 10.23 10.75 5.46 19H22V21H2V3H4V17.54L9.97 7.25 16.5 11z"/></svg>
+      Live graphs <span class="right" id="window">window 120 s · click a graph to change</span></h2>
+    <div class="body" id="graphs"></div>
+  </section>
+
+  <div class="col">
+    <section class="card">
+      <h2><svg viewBox="0 0 24 24"><path d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z"/></svg>
+        Bench data <span class="right" id="monstate">idle</span></h2>
+      <div class="body"><div class="data" id="data"></div></div>
+    </section>
+
+    <section class="card">
+      <h2><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Tests</h2>
+      <div class="body">
+        <div class="favs" id="favs"></div>
+        <div class="mon">
+          <input id="monlabel" value="manual" title="Label for the CSV file name" spellcheck="false">
+          <button class="b" data-enc="ENCODER_RESET">ENC reset</button>
+          <button class="b go" id="monstart">Monitor start</button>
+          <button class="b stop" data-enc="FLOW_MONITOR_STOP">Monitor stop</button>
+        </div>
+        <div id="fans"></div>
+      </div>
+    </section>
+
+    <section class="card console">
+      <h2><svg viewBox="0 0 24 24"><path d="M20 19V7H4v12h16m0-16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16m-7 14v-2h5v2h-5m-3.42-4L5.57 9H8.4l3.3 3.3c.39.39.39 1.03 0 1.42L8.42 17H5.59l3.99-4z"/></svg>
+        Console</h2>
+      <div class="body">
+        <div class="cbar">
+          <input id="cmd" placeholder="Send code…" spellcheck="false" autocomplete="off">
+          <button class="b" id="send">Send</button>
+          <button class="b" id="clear">Clear</button>
+          <button class="b" id="filter" title="Show or hide temperature reports">Filter</button>
+        </div>
+        <div class="clog" id="clog"></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card files">
+    <h2><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6m4 18H6V4h7v5h5v11M8 15h8v2H8v-2m0-4h8v2H8v-2z"/></svg>
+      Test data <span class="right" id="filecount"></span></h2>
+    <div class="body" style="padding:0 0 6px"><div id="files"></div></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const HZ = 4, WINDOWS = [30, 120, 600], CONSOLE_MAX = 300, FAV_COUNT = 7;
+const TEMP_COLORS = ["#ED93B1", "#AFA9EC", "#FAC775", "#85B7EB", "#F0997B"];
+const TEMP_REPORT = /^(?:ok\s+)?(B|C|T\d*):/;
+const FILE_ROOTS = [{ root: "testdata", match: () => true, writable: true },
+                    { root: "logs", match: p => /^flow_.*\.csv$/i.test(p), writable: false }];
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (v, d, unit) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "—"
+  : Number(v).toFixed(d) + (unit ? " " + unit : "");
+const short = name => name.includes(" ") ? name.split(" ").slice(1).join(" ") : name;
+
+// ---------------- Moonraker JSON-RPC over websocket ----------------
+let ws = null, rpcId = 0;
+const pending = new Map();
+function rpc(method, params = {}) {
+  return new Promise((resolve, reject) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return reject(new Error("not connected"));
+    const id = ++rpcId;
+    pending.set(id, { resolve, reject });
+    ws.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
+  });
+}
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/websocket`);
+  ws.onopen = async () => {
+    setState("connected");
+    try {
+      await rpc("server.connection.identify", { client_name: "toucan-bench", version: "1.0",
+        type: "web", url: location.href });
+    } catch (e) { /* older Moonraker: not fatal */ }
+    init();
+  };
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.id !== undefined && pending.has(msg.id)) {
+      const p = pending.get(msg.id); pending.delete(msg.id);
+      msg.error ? p.reject(new Error(msg.error.message)) : p.resolve(msg.result);
+      return;
+    }
+    handleNotify(msg.method, msg.params || []);
+  };
+  ws.onclose = () => {
+    setState("disconnected – retrying", true);
+    for (const p of pending.values()) p.reject(new Error("closed"));
+    pending.clear();
+    setTimeout(connect, 2000);
+  };
+}
+function setState(text, bad = false) { const s = $("state"); s.textContent = text; s.classList.toggle("bad", bad); }
+
+// ---------------- state ----------------
+const S = { status: {}, settings: {}, encoder: null, loadCell: null, temps: [], fans: [], runout: null,
+  flowSensor: null, forceSensor: null, ready: false };
+const buf = {};
+const bufMax = Math.max(...WINDOWS) * HZ;
+function push(key, v) { const b = buf[key] || (buf[key] = []); b.push(v); if (b.length > bufMax) b.splice(0, b.length - bufMax); }
+
+function merge(status) {
+  for (const [obj, fields] of Object.entries(status)) {
+    S.status[obj] = Object.assign(S.status[obj] || {}, fields);
+  }
+}
+
+async function init() {
+  S.ready = false;
+  try {
+    const info = await rpc("printer.info");
+    if (info.hostname) $("hostname").textContent = info.hostname;
+    if (info.state !== "ready") {
+      showBanner(`Klipper: ${info.state} – ${info.state_message || ""}`);
+      setTimeout(() => ws && ws.readyState === WebSocket.OPEN && init(), 3000);
+      return;
+    }
+    showBanner("");
+    const { objects } = await rpc("printer.objects.list");
+    const cfg = await rpc("printer.objects.query", { objects: { configfile: ["settings"] } });
+    S.settings = cfg.status.configfile.settings || {};
+    const type = name => (S.settings[name.toLowerCase()] || {}).sensor_type || "";
+    S.encoder = objects.find(o => o.startsWith("filament_encoder ")) || null;
+    S.loadCell = objects.find(o => o === "load_cell" || o.startsWith("load_cell ")) || null;
+    S.flowSensor = objects.find(o => o.startsWith("temperature_sensor ") && type(o) === "filament_flow") || null;
+    S.forceSensor = objects.find(o => o.startsWith("temperature_sensor ") && type(o) === "load_cell_force") || null;
+    S.temps = objects.filter(o => (/^(extruder\d*|heater_bed|heater_generic |temperature_sensor |temperature_fan )/.test(o))
+      && !["filament_flow", "load_cell_force"].includes(type(o)) && !short(o).startsWith("_"));
+    S.fans = objects.filter(o => o === "fan" || o.startsWith("fan_generic "));
+    S.runout = objects.find(o => /^filament_(switch|motion)_sensor /.test(o)) || null;
+
+    const sub = { webhooks: ["state", "state_message"] };
+    for (const o of [S.encoder, S.loadCell, S.runout]) if (o) sub[o] = null;
+    for (const o of S.temps) sub[o] = ["temperature"];
+    for (const o of S.fans) sub[o] = ["speed"];
+    const res = await rpc("printer.objects.subscribe", { objects: sub });
+    S.status = {}; merge(res.status);
+
+    buildGraphs(); buildData(); buildFavs(); buildFans();
+    await prefill();
+    loadConsole();
+    loadFiles();
+    S.ready = true;
+    setState("ready");
+  } catch (e) {
+    showBanner("Init failed: " + e.message);
+    setTimeout(() => ws && ws.readyState === WebSocket.OPEN && init(), 3000);
+  }
+}
+function showBanner(text) { const b = $("banner"); b.textContent = text; b.style.display = text ? "block" : "none"; }
+
+function handleNotify(method, params) {
+  switch (method) {
+    case "notify_status_update": merge(params[0] || {}); break;
+    case "notify_gcode_response": addLine("response", Date.now() / 1000, params[0]); break;
+    case "notify_klippy_ready": init(); break;
+    case "notify_klippy_shutdown": showBanner("Klipper shutdown"); setState("shutdown", true); break;
+    case "notify_klippy_disconnected": S.ready = false; showBanner("Klipper disconnected"); setState("klippy disconnected", true); break;
+    case "notify_filelist_changed": scheduleFiles(); break;
+  }
+}
+
+// ---------------- values ----------------
+const enc = () => (S.encoder && S.status[S.encoder]) || {};
+function force() {
+  const d = (S.loadCell && S.status[S.loadCell]) || {};
+  for (const f of ["force_g", "force"]) if (typeof d[f] === "number") return d[f];
+  return null;
+}
+const temp = name => { const v = (S.status[name] || {}).temperature; return typeof v === "number" ? v : null; };
+
+function sample() {
+  if (!S.ready) return;
+  const e = enc();
+  push("flow", typeof e.flow === "number" ? e.flow : null);
+  push("force", force());
+  for (const t of S.temps) push(t, temp(t));
+}
+
+async function prefill() {
+  for (const k of Object.keys(buf)) delete buf[k];
+  let store = {};
+  try { store = await rpc("server.temperature_store", { include_monitors: false }); } catch (e) { return; }
+  const seed = (key, device) => {
+    const hist = ((store[device] || {}).temperatures || []).slice(-Math.max(...WINDOWS));
+    let start = 0; while (start < hist.length && hist[start] === 0) start++;  // zero padding before start
+    for (let i = 0; i < hist.length; i++) for (let k = 0; k < HZ; k++) push(key, i < start ? null : hist[i]);
+  };
+  if (S.flowSensor) seed("flow", S.flowSensor);
+  if (S.forceSensor) seed("force", S.forceSensor);
+  for (const t of S.temps) seed(t, t);
+}
+
+// ---------------- graphs ----------------
+let winIdx = 1;
+const graphs = [];
+function buildGraphs() {
+  const box = $("graphs"); box.innerHTML = ""; graphs.length = 0;
+  const add = (titleHtml, key, series, opts) => {
+    const g = document.createElement("div"); g.className = "gbox";
+    g.innerHTML = `<div class="ghead"><span>${titleHtml}</span><span id="cur_${key}"></span></div><canvas></canvas>`;
+    box.appendChild(g);
+    const c = g.querySelector("canvas");
+    c.addEventListener("click", () => { winIdx = (winIdx + 1) % WINDOWS.length;
+      $("window").textContent = `window ${WINDOWS[winIdx]} s · click a graph to change`; });
+    graphs.push(Object.assign({ canvas: c, series, message: null, key }, opts));
+  };
+  add(`<span style="color:var(--flow)">Flow [mm³/s]</span>`, "flow", [{ key: "flow", color: "#5DCAA5" }],
+    { zero: true, minSpan: 5, empty: S.encoder ? null : "No filament_encoder configured" });
+  const names = S.temps.map((t, i) => `<span style="color:${TEMP_COLORS[i % TEMP_COLORS.length]}">${esc(short(t))}</span>`).join(" · ");
+  add(`Temperature [°C] &nbsp;${names}`, "temp",
+    S.temps.map((t, i) => ({ key: t, color: TEMP_COLORS[i % TEMP_COLORS.length] })), { zero: false, minSpan: 2 });
+  add(`<span style="color:var(--force)">Nozzle force [g]</span>`, "force", [{ key: "force", color: "#97C459" }],
+    { zero: true, minSpan: 100, empty: S.loadCell ? null : "No load cell configured" });
+}
+
+function niceStep(span, n) {
+  const raw = span / n, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * p) return m * p;
+  return 10 * p;
+}
+function drawGraph(g) {
+  const c = g.canvas, dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w || !h) return;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  const n = WINDOWS[winIdx] * HZ;
+  const data = g.series.map(s => (buf[s.key] || []).slice(-n));
+  let lo = Infinity, hi = -Infinity;
+  for (const d of data) for (const v of d) if (v !== null) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const L = 46, R = 8, T = 6, B = 18, pw = w - L - R, ph = h - T - B;
+  ctx.font = "11px Consolas, monospace"; ctx.fillStyle = "#6b7480"; ctx.strokeStyle = "#2a323d"; ctx.lineWidth = 1;
+  const msg = g.message || g.empty;
+  if (lo === Infinity) { lo = 0; hi = g.minSpan; }
+  if (g.zero) lo = Math.min(0, lo);
+  if (hi - lo < g.minSpan) { const mid = g.zero ? lo + g.minSpan / 2 : (hi + lo) / 2; lo = g.zero ? lo : mid - g.minSpan / 2; hi = lo + g.minSpan; }
+  const step = niceStep(hi - lo, 4);
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const y = v => T + ph - (v - lo) / (hi - lo) * ph;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let v = lo; v <= hi + step / 2; v += step) {
+    const yy = Math.round(y(v)) + .5;
+    ctx.beginPath(); ctx.moveTo(L, yy); ctx.lineTo(L + pw, yy); ctx.stroke();
+    ctx.fillText(Math.abs(step) < 1 ? v.toFixed(1) : Math.round(v).toString(), L - 6, yy);
+  }
+  const secs = WINDOWS[winIdx], tstep = secs <= 30 ? 5 : secs <= 120 ? 20 : 100;
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let s = 0; s <= secs; s += tstep) {
+    const xx = Math.round(L + pw - s / secs * pw) + .5;
+    ctx.beginPath(); ctx.moveTo(xx, T); ctx.lineTo(xx, T + ph); ctx.stroke();
+    ctx.fillText(s === 0 ? "now" : `-${s}s`, xx, T + ph + 4);
+  }
+  ctx.lineWidth = 1.6; ctx.lineJoin = "round";
+  data.forEach((d, i) => {
+    ctx.strokeStyle = g.series[i].color; ctx.beginPath();
+    let pen = false;
+    const off = n - d.length;
+    d.forEach((v, j) => {
+      if (v === null) { pen = false; return; }
+      const xx = L + (off + j) / (n - 1) * pw, yy = y(v);
+      pen ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy); pen = true;
+    });
+    ctx.stroke();
+  });
+  if (msg) { ctx.fillStyle = "#8a929c"; ctx.font = "13px Roboto, Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(msg, L + pw / 2, T + ph / 2); }
+}
+
+// ---------------- data grid ----------------
+const ROWS = [];
+function buildData() {
+  const sensors = S.temps.slice(0, 3).map(t => [`t_${t}`, short(t)]);
+  const cols = [
+    ["Encoder", [["abs", "abs"], ["rel", "rel"], ["edges", "edges"], ["mpe", "mm/edge"], ["speed", "speed"], ["flowv", "flow"]]],
+    ["Monitor", [["label", "label"], ["elapsed", "elapsed"], ["last", "last"], ["dur", "dur"], ["len", "len"], ["qavg", "Q avg/max"]]],
+    ["Sensors", sensors.concat([["force", "force"], ["fmax", "F max"], ["runout", "runout"], ["ratio", "ratio"]])],
+  ];
+  $("data").innerHTML = cols.map(([head, rows]) =>
+    `<div><div class="r"><span class="h">${head}</span><span id="h_${head}"></span></div>` +
+    rows.map(([k, n]) => `<div class="r"><span>${esc(n)}</span><span id="d_${esc(k)}">—</span></div>`).join("") + "</div>").join("");
+}
+function setT(id, text, color) { const el = document.getElementById(id); if (!el) return; el.textContent = text; el.style.color = color || ""; }
+
+function refresh() {
+  if (!S.ready) return;
+  const e = enc(), mon = e.monitor || {}, last = e.last_result || {};
+  setT("d_abs", fmt(e.absolute, 2, "mm")); setT("d_rel", fmt(e.relative, 2, "mm"));
+  setT("d_edges", fmt(e.relative_edges, 0)); setT("d_mpe", fmt(e.mm_per_edge, 3));
+  setT("d_speed", fmt(e.speed, 2, "mm/s")); setT("d_flowv", fmt(e.flow, 2, "mm³/s"));
+  const run = !!mon.active;
+  setT("h_Monitor", run ? "RUN" : "idle", run ? "var(--ok)" : "");
+  setT("monstate", run ? `monitor running: ${mon.label || ""}` : "idle", run ? "var(--ok)" : "");
+  setT("d_label", run ? (mon.label || "—") : "—"); setT("d_elapsed", run ? fmt(mon.elapsed, 1, "s") : "—");
+  setT("d_last", last.label || "—"); setT("d_dur", fmt(last.duration, 1, "s")); setT("d_len", fmt(last.length, 1, "mm"));
+  setT("d_qavg", last.flow_avg == null ? "—" : `${fmt(last.flow_avg, 1)}/${fmt(last.flow_max, 0)}`);
+  for (const t of S.temps.slice(0, 3)) setT(`d_t_${t}`, fmt(temp(t), 2, "°C"));
+  const f = force(); setT("d_force", fmt(f, 0, "g"));
+  const fv = (buf.force || []).filter(v => v !== null); setT("d_fmax", fv.length ? fmt(Math.max(...fv), 0, "g") : "—");
+  if (S.runout) {
+    const d = S.status[S.runout] || {};
+    if (d.enabled === false) setT("d_runout", "off");
+    else d.filament_detected ? setT("d_runout", "ok", "var(--ok)") : setT("d_runout", "EMPTY", "var(--err)");
+  } else setT("d_runout", "—");
+  setT("d_ratio", fmt(run ? mon.ratio : last.ratio, 3));
+  setT("cur_flow", fmt(e.flow, 2)); setT("cur_force", fmt(f, 0));
+  setT("cur_temp", S.temps.map(t => fmt(temp(t), 1)).join(" · "));
+  const fg = graphs.find(g => g.key === "force");
+  if (fg && S.loadCell) fg.message = (S.status[S.loadCell] || {}).is_calibrated === false ? "Load cell not calibrated" : null;
+  for (const fan of S.fans) {
+    const sp = (S.status[fan] || {}).speed || 0, row = fanRows[fan];
+    if (!row) continue;
+    row.v.textContent = Math.round(sp * 100) + "%";
+    if (!row.dragging) row.r.value = Math.round(sp * 100);
+  }
+}
+
+// ---------------- actions ----------------
+async function gcode(script) {
+  addLine("command", Date.now() / 1000, script);
+  try { await rpc("printer.gcode.script", { script }); }
+  catch (e) { addLine("error", Date.now() / 1000, "!! " + e.message); }
+}
+function encoderCmd(cmd) {
+  if (!S.encoder) return addLine("error", Date.now() / 1000, "!! No filament_encoder configured");
+  gcode(`${cmd} ENCODER=${short(S.encoder)}`);
+}
+document.querySelectorAll("[data-enc]").forEach(b => b.addEventListener("click", () => encoderCmd(b.dataset.enc)));
+$("monstart").addEventListener("click", () => {
+  const label = ($("monlabel").value.trim() || "manual").replace(/[^A-Za-z0-9_-]/g, "_");
+  encoderCmd(`FLOW_MONITOR_START LABEL=${label} LOG=1`);
+});
+$("estop").addEventListener("click", () => rpc("printer.emergency_stop").catch(e => addLine("error", Date.now() / 1000, "!! " + e.message)));
+
+function favMacro(n) {
+  const key = Object.keys(S.settings).find(k => k === `gcode_macro fav_${n}`);
+  return key ? { name: `FAV_${n}`, desc: S.settings[key].description || `FAV_${n}` } : null;
+}
+function buildFavs() {
+  const box = $("favs"); box.innerHTML = "";
+  for (let n = 1; n <= FAV_COUNT; n++) {
+    const m = favMacro(n), b = document.createElement("button");
+    b.className = "b" + (m ? "" : " unset");
+    b.innerHTML = `<b>F${n}</b><small>${esc(m ? m.desc : "not set")}</small>`;
+    b.title = m ? `${m.name}: ${m.desc}` : `Add [gcode_macro FAV_${n}] with a description to the Klipper config`;
+    b.addEventListener("click", () => m ? gcode(m.name)
+      : addLine("info", Date.now() / 1000, `FAV_${n} is not defined. Add [gcode_macro FAV_${n}] with a description in the Klipper config.`));
+    box.appendChild(b);
+  }
+  const edit = document.createElement("button"); edit.className = "b";
+  edit.innerHTML = "<b>Edit</b><small>config files</small>";
+  edit.addEventListener("click", () => { location.href = "/config"; });
+  box.appendChild(edit);
+}
+
+const fanRows = {};
+function buildFans() {
+  const box = $("fans"); box.innerHTML = "";
+  for (const fan of S.fans) {
+    const row = document.createElement("div"); row.className = "fan";
+    row.innerHTML = `<span class="n">${esc(short(fan))}</span><input type="range" min="0" max="100" step="5">
+      <span class="v">—</span><button class="b" data-s="0">0</button><button class="b" data-s="100">100</button>`;
+    const r = row.querySelector("input"), v = row.querySelector(".v");
+    const set = s => gcode(fan === "fan" ? `M106 S${Math.round(s * 2.55)}` : `SET_FAN_SPEED FAN=${short(fan)} SPEED=${(s / 100).toFixed(2)}`);
+    fanRows[fan] = { r, v, dragging: false };
+    r.addEventListener("input", () => { fanRows[fan].dragging = true; v.textContent = r.value + "%"; });
+    r.addEventListener("change", () => { fanRows[fan].dragging = false; set(Number(r.value)); });
+    row.querySelectorAll("button").forEach(b => b.addEventListener("click", () => set(Number(b.dataset.s))));
+    box.appendChild(row);
+  }
+}
+
+// ---------------- console ----------------
+let hideTemps = true, consoleLines = 0;
+const history = []; let histPos = 0;
+function addLine(type, time, message) {
+  if (type !== "command" && hideTemps && TEMP_REPORT.test(message)) return;
+  if (type === "response" && message.startsWith("!!")) type = "error";
+  const el = document.createElement("div");
+  const t = new Date(time * 1000).toLocaleTimeString("de-DE");
+  el.innerHTML = `<span class="t">${t}</span><span class="${type}">${esc(message)}</span>`;
+  const log = $("clog"); log.insertBefore(el, log.firstChild);   // newest on top, like Mainsail
+  if (++consoleLines > CONSOLE_MAX) { log.removeChild(log.lastChild); consoleLines--; }
+}
+async function loadConsole() {
+  try {
+    const r = await rpc("server.gcode_store", { count: 100 });
+    $("clog").innerHTML = ""; consoleLines = 0;
+    for (const item of r.gcode_store) addLine(item.type, item.time, item.message);
+  } catch (e) { /* not fatal */ }
+}
+function sendCmd() {
+  const inp = $("cmd"), cmd = inp.value.trim(); inp.value = "";
+  if (!cmd) return;
+  history.push(cmd); histPos = history.length; gcode(cmd);
+}
+$("send").addEventListener("click", sendCmd);
+$("cmd").addEventListener("keydown", e => {
+  if (e.key === "Enter") sendCmd();
+  else if (e.key === "ArrowUp" && histPos > 0) { $("cmd").value = history[--histPos]; e.preventDefault(); }
+  else if (e.key === "ArrowDown") { histPos = Math.min(history.length, histPos + 1); $("cmd").value = history[histPos] || ""; }
+});
+$("clear").addEventListener("click", () => { $("clog").innerHTML = ""; consoleLines = 0; });
+$("filter").addEventListener("click", () => { hideTemps = !hideTemps;
+  addLine("info", Date.now() / 1000, `Temperature reports ${hideTemps ? "hidden" : "shown"}`); });
+
+// ---------------- test data files ----------------
+let filesTimer = null;
+function scheduleFiles() { clearTimeout(filesTimer); filesTimer = setTimeout(loadFiles, 500); }
+function size(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : (b / 1024).toFixed(1) + " kB"; }
+async function loadFiles() {
+  const rows = [];
+  for (const src of FILE_ROOTS) {
+    try {
+      const list = await rpc("server.files.list", { root: src.root });
+      for (const f of list) if (src.match(f.path)) rows.push(Object.assign({ root: src.root, writable: src.writable }, f));
+    } catch (e) { /* root missing: skip */ }
+  }
+  rows.sort((a, b) => b.modified - a.modified);
+  $("filecount").textContent = `${rows.length} file${rows.length === 1 ? "" : "s"} · testdata + flow CSVs in logs`;
+  if (!rows.length) { $("files").innerHTML = `<div class="empty">No test data yet.</div>`; return; }
+  $("files").innerHTML = `<table><thead><tr><th>File</th><th class="hide-sm">Folder</th><th class="num">Size</th>
+    <th class="hide-sm">Modified</th><th></th></tr></thead><tbody>` + rows.map(f => {
+      const url = `/server/files/${encodeURIComponent(f.root)}/${f.path.split("/").map(encodeURIComponent).join("/")}`;
+      const del = f.writable ? `<button class="icon-btn" data-del="${esc(f.root + "/" + f.path)}" title="Delete">✕</button>` : "";
+      return `<tr><td class="name"><a href="${url}" download="${esc(f.path.split("/").pop())}">${esc(f.path)}</a></td>
+        <td class="hide-sm"><span class="badge">${esc(f.root)}</span></td><td class="num">${size(f.size)}</td>
+        <td class="hide-sm">${new Date(f.modified * 1000).toLocaleString("de-DE")}</td>
+        <td class="num"><a class="icon-btn" href="${url}" download="${esc(f.path.split("/").pop())}" title="Download">⬇</a>${del}</td></tr>`;
+    }).join("") + "</tbody></table>";
+  $("files").querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => {
+    if (!confirm(`Delete ${b.dataset.del}?`)) return;
+    try { await rpc("server.files.delete_file", { path: b.dataset.del }); scheduleFiles(); }
+    catch (e) { alert("Delete failed: " + e.message); }
+  }));
+}
+
+// ---------------- loops ----------------
+setInterval(sample, 1000 / HZ);
+setInterval(refresh, 500);
+(function frame() { for (const g of graphs) drawGraph(g); setTimeout(() => requestAnimationFrame(frame), 250); })();
+connect();
+</script>
+</body>
+</html>
